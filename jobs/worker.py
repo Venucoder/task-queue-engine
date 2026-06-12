@@ -1,6 +1,8 @@
 import os
 import sys
 import logging
+import time
+
 import redis
 import django
 
@@ -28,6 +30,17 @@ print("Redis ping:", redis_client.ping())
 # Priority Order - worker always checks high before normal
 QUEUES = ["queue:high", "queue:normal"]
 
+def calculate_backoff(retry_count):
+    """Exponential backoff: 2s, 4s, 8s, 16s..."""
+    return 2 ** retry_count
+
+def move_to_dead_letter_queue(job):
+    """Job has exhausted after all retires, move to dead letter queue"""
+    redis_client.rpush('queue:dead', str(job.id))
+    job.status = Job.Status.DEAD
+    job.save()
+    logger.error(f"Job {job.id} moved to dead letter queue after {job.retry_count} retires")
+
 def process_job(job_id):
     # Get a job from DB
     try:
@@ -35,7 +48,7 @@ def process_job(job_id):
     except Job.DoesNotExist:
         logger.error(f"Job {job_id} does not exist")
 
-    logger.info(f"Processing job {job_id} | task_type: {job.task_type} | priority: {job.priority}")
+    logger.info(f"Processing job {job_id} | task_type: {job.task_type} | priority: {job.priority} | attempt: {job.retry_count + 1}")
 
     # Set Job status as processing
     job.status = Job.Status.PROCESSING
@@ -58,10 +71,37 @@ def process_job(job_id):
         job.save()
         logger.info(f"Job {job_id} completed successfully")
     except Exception as e:
-        job.status = Job.Status.FAILED
-        job.result = {"error": str(e)}
-        job.save()
-        logger.info(f"Job {job_id} failed with error: {str(e)}")
+        # Increase Retry count
+        job.retry_count += 1
+        error_msg = str(e)
+        logger.warning(f"Job {job_id} failed (attempt: {job.retry_count}) with error: {error_msg}")
+
+        if job.retry_count >= job.max_retries:
+            # If all retires exhausted, move the task to dead queue and update DB
+            job.result = {
+                "error": error_msg,
+                "final_attempt": job.retry_count
+            }
+            job.save()
+            move_to_dead_letter_queue(job)
+
+        else:
+            # Otherwise, calculate backoff and put the job status in Pending and re-queue the task
+            backoff = calculate_backoff(job.retry_count)
+            logger.info(f"Retrying job {job_id} in {backoff}s, (attempt: {job.retry_count}/{job.max_retries})")
+            job.status = Job.Status.PENDING
+            job.result = {
+                "last_error": error_msg,
+                "retry_count": job.retry_count,
+                "next_retry_in_seconds": backoff
+            }
+            job.save()
+
+            # Wait, then re-push to same priority queue
+            time.sleep(backoff)
+            queue_name = f"queue:{job.priority}"
+            redis_client.rpush(queue_name, str(job.id))
+            logger.info(f"Job {job_id} re-queued to {queue_name}")
 
 def run_worker():
     logger.info(f"Worker started. Listening to Queues: {QUEUES}")

@@ -40,8 +40,11 @@ class JobStatsView(APIView):
                  'processing': Job.objects.filter(status=Job.Status.PROCESSING).count(),
                  'done': Job.objects.filter(status=Job.Status.DONE).count(),
                  'failed': Job.objects.filter(status=Job.Status.FAILED).count(),
+                 'dead': Job.objects.filter(status=Job.Status.DEAD).count(),
                  'redis_high_priority_queue': redis_client.llen('queue:high'),
-                 'redis_normal_priority_queue': redis_client.llen('queue:normal')}
+                 'redis_normal_priority_queue': redis_client.llen('queue:normal'),
+                 'redis_dead_letter_queue': redis_client.llen('queue:dead'),
+                 }
 
         return Response(stats)
 

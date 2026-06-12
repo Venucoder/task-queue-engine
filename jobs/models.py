@@ -7,6 +7,7 @@ class Job(models.Model):
         PROCESSING = 'processing'
         DONE = 'done'
         FAILED = 'failed'
+        DEAD = 'dead'
 
     class Priority(models.TextChoices):
         HIGH = 'high'
@@ -18,6 +19,7 @@ class Job(models.Model):
     payload = models.JSONField()
     result = models.JSONField(null=True, blank=True)
     retry_count = models.IntegerField(default=0)
+    max_retries = models.IntegerField(default=3)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

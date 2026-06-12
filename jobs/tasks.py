@@ -1,3 +1,4 @@
+import random
 import time
 import logging
 
@@ -7,6 +8,11 @@ def handle_send_email(payload):
     """Simulate sending an email"""
     to = payload.get('to')
     subject = payload.get('subject')
+
+    # Simulate transient failure 50% of the time
+    if random.random() < 0.5:
+        raise Exception("SMTP server temporarily unavailable")
+
     time.sleep(2)
     logger.info(f"Email sent to {to} with subject {subject}")
     return {"message": f"Email sent to {to}", "subject": subject}
