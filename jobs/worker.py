@@ -41,14 +41,14 @@ def move_to_dead_letter_queue(job):
     job.save()
     logger.error(f"Job {job.id} moved to dead letter queue after {job.retry_count} retires")
 
-def process_job(job_id):
+def process_job(job_id, worker_id='worker-1'):
     # Get a job from DB
     try:
         job = Job.objects.get(id=job_id)
     except Job.DoesNotExist:
-        logger.error(f"Job {job_id} does not exist")
+        logger.error(f"[{worker_id}] Job {job_id} does not exist")
 
-    logger.info(f"Processing job {job_id} | task_type: {job.task_type} | priority: {job.priority} | attempt: {job.retry_count + 1}")
+    logger.info(f"[{worker_id}] Processing job {job_id} | task_type: {job.task_type} | priority: {job.priority} | attempt: {job.retry_count + 1}")
 
     # Set Job status as processing
     job.status = Job.Status.PROCESSING
@@ -60,7 +60,7 @@ def process_job(job_id):
         job.status = Job.Status.FAILED
         job.result = {"error": f"Unknown task type {job.task_type}"}
         job.save()
-        logger.error(f"No handler found for task type {job.task_type}")
+        logger.error(f"[{worker_id}] No handler found for task type {job.task_type}")
         return
 
     # If exists run the task with handler and save the result in the DB
@@ -69,12 +69,12 @@ def process_job(job_id):
         job.result = result
         job.status = Job.Status.DONE
         job.save()
-        logger.info(f"Job {job_id} completed successfully")
+        logger.info(f"[{worker_id}] Job {job_id} completed successfully")
     except Exception as e:
         # Increase Retry count
         job.retry_count += 1
         error_msg = str(e)
-        logger.warning(f"Job {job_id} failed (attempt: {job.retry_count}) with error: {error_msg}")
+        logger.warning(f"[{worker_id}] Job {job_id} failed (attempt: {job.retry_count}) with error: {error_msg}")
 
         if job.retry_count >= job.max_retries:
             # If all retires exhausted, move the task to dead queue and update DB
@@ -88,7 +88,7 @@ def process_job(job_id):
         else:
             # Otherwise, calculate backoff and put the job status in Pending and re-queue the task
             backoff = calculate_backoff(job.retry_count)
-            logger.info(f"Retrying job {job_id} in {backoff}s, (attempt: {job.retry_count}/{job.max_retries})")
+            logger.info(f"[{worker_id}] Retrying job {job_id} in {backoff}s, (attempt: {job.retry_count}/{job.max_retries})")
             job.status = Job.Status.PENDING
             job.result = {
                 "last_error": error_msg,
@@ -101,23 +101,20 @@ def process_job(job_id):
             time.sleep(backoff)
             queue_name = f"queue:{job.priority}"
             redis_client.rpush(queue_name, str(job.id))
-            logger.info(f"Job {job_id} re-queued to {queue_name}")
+            logger.info(f"[{worker_id}] Job {job_id} re-queued to {queue_name}")
 
-def run_worker():
-    logger.info(f"Worker started. Listening to Queues: {QUEUES}")
+def run_worker(worked_id='worker-1'):
+    logger.info(f"[{worked_id}] Worker started. Listening to Queues: {QUEUES}")
 
     # Continuously listen to the queues to fetch the tasks with BLPOP
     while True:
         # BLPOP blocks until job appears - timeout=30 means it wakes up every 30 seconds even if empty, just to stay alive
         result = redis_client.blpop(QUEUES, timeout=30)
         if not result:
-            logger.info("No jobs in the queue, Waiting...")
+            logger.info(f"[{worked_id}] No jobs in the queue, Waiting...")
             continue
 
         queue_name, job_id_bytes = result
         job_id = int(job_id_bytes.decode('utf-8'))
-        logger.info(f"Picked up job {job_id} from queue: {queue_name.decode()}")
-        process_job(job_id)
-
-if __name__ == "__main__":
-    run_worker()
+        logger.info(f"[{worked_id}] Picked up job {job_id} from queue: {queue_name.decode()}")
+        process_job(job_id, worked_id)
