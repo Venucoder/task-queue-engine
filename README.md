@@ -5,7 +5,7 @@ Django, Redis, and PostgreSQL — without Celery or any task queue library.
 
 ## Architecture
 
-![Architecture Diagram](architecture.png)
+![Architecture Diagram](task_queue_engine_arct_diag_01.png)
 
 ## Features
 
@@ -100,3 +100,15 @@ to handle this safely.
 | Max retries exceeded | Moved to dead letter queue |
 | Worker crashes mid-job | Reaper detects and requeues after 10 min |
 | Unknown task type | Immediately marked failed, no retry |
+
+## Known Limitations
+
+**Idempotency:** Current task handlers (`send_email`, `generate_report`) 
+are not idempotent - if a worker crashes after completing a task but 
+before saving status=done, the reaper may requeue it, causing duplicate 
+execution. In production, this would be solved by:
+- Using a unique idempotency key per job, checked before execution
+- Or making the operation itself idempotent (e.g., "set user status to X" 
+  instead of "increment counter by 1")
+
+This is a known tradeoff of at-least-once delivery systems.
